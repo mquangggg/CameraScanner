@@ -65,21 +65,34 @@ public class CameraManager {
     private static final long QUAD_PERSISTENCE_TIMEOUT_MS = 1500; // 1.5 giây
 
     // Biến cho chế độ thẻ ID tự động chụp
-    private boolean isIdCardMode = false;
-    private boolean autoCaptureEnabled = true;
-    private long lastAutoCaptureTime = 0L;
-    private static final long AUTO_CAPTURE_COOLDOWN_MS = 3000;
+    private boolean isIdCardMode = false; // Chế độ thẻ ID
+    private long lastIdCardAutoCaptureTime = 0L; // Thời gian tự động chụp thẻ ID cuối cùng
+    private static final long ID_CARD_AUTO_CAPTURE_COOLDOWN_MS = 10000; // Thời gian chờ giữa các lần tự động chụp thẻ ID
     private static final double ID_CARD_ASPECT_RATIO_MIN = 1.5;
     private static final double ID_CARD_ASPECT_RATIO_MAX = 1.85;
-    private int consecutiveValidFrames = 0;
-    private static final int REQUIRED_CONSECUTIVE_FRAMES = 10;
+    private int consecutiveValidFramesIdCard = 0; // Số khung hợp lệ liên tiếp cho thẻ ID
+    private static final int REQUIRED_CONSECUTIVE_FRAMES_ID_CARD = 15; // Số khung liên tiếp cần thiết cho thẻ ID
+
+    // Biến cho chế độ quét tài liệu thông thường tự động chụp
+    private boolean isAutoCaptureGloballyEnabled = true; // Bật/tắt tự động chụp toàn cục (mặc định BẬT)
+    private MatOfPoint previousStableQuadrilateral = null; // Hình tứ giác ổn định trước đó
+    private long lastNormalScanAutoCaptureTime = 0L; // <-- ĐÃ THÊM KHAI BÁO BIẾN NÀY
+    private static final long NORMAL_SCAN_AUTO_CAPTURE_COOLDOWN_MS = 3000; // Thời gian chờ giữa các lần tự động chụp quét thông thường
+    private static final double MIN_STABILITY_AREA_CHANGE_PERCENT = 0.1; // 1% thay đổi diện tích
+    private static final double MIN_STABILITY_POINT_CHANGE_PIXELS = 10.0; // 5 pixel thay đổi vị trí điểm
+    private int consecutiveStableFramesNormal = 0; // Số khung ổn định liên tiếp cho quét thông thường
+    private static final int REQUIRED_CONSECUTIVE_STABLE_FRAMES_NORMAL = 10; // Số khung liên tiếp cần thiết cho quét thông thường
+    private static final double NORMAL_SCAN_ASPECT_RATIO_MIN = 0.5; // Tỷ lệ khung hình tối thiểu cho tài liệu thông thường
+    private static final double NORMAL_SCAN_ASPECT_RATIO_MAX = 2.0; // Tỷ lệ khung hình tối đa cho tài liệu thông thường
+
+
     private int frameCount = 0;
-    private static final int PROCESS_FRAME_INTERVAL = 3;
+    private static final int PROCESS_FRAME_INTERVAL = 3; // Xử lý mỗi 3 khung hình
 
     public interface CameraCallbacks {
         void onImageCaptured(Uri imageUri);
         void onCameraError(String message);
-        void onAutoCaptureTriggered();
+        void onAutoCaptureTriggered(); // Vẫn dùng chung callback này
         void updateOverlay(MatOfPoint quadrilateral, int effectiveWidth, int effectiveHeight);
         void clearOverlay();
     }
@@ -126,7 +139,7 @@ public class CameraManager {
                 .build();
 
         imageAnalysis.setAnalyzer(cameraExecutor, imageProxy -> {
-            Log.d(TAG, "DEBUG_DIM: ImageProxy original dimensions: " + imageProxy.getWidth() + "x" + imageProxy.getHeight() + " Rotation: " + imageProxy.getImageInfo().getRotationDegrees());
+            // Log.d(TAG, "DEBUG_DIM: ImageProxy original dimensions: " + imageProxy.getWidth() + "x" + imageProxy.getHeight() + " Rotation: " + imageProxy.getImageInfo().getRotationDegrees());
 
             MatOfPoint newlyDetectedQuadrilateral = null;
             Mat processedFrameForDimensions = null;
@@ -139,7 +152,7 @@ public class CameraManager {
                     newlyDetectedQuadrilateral = detectionResult.first;
                     processedFrameForDimensions = detectionResult.second;
 
-                    Log.d(TAG, "Đã xử lý khung hình đầy đủ. Khung: " + frameCount);
+                    // Log.d(TAG, "Đã xử lý khung hình đầy đủ. Khung: " + frameCount);
 
                     if (newlyDetectedQuadrilateral != null && processedFrameForDimensions != null) {
                         if (lastDetectedQuadrilateral != null) {
@@ -150,32 +163,46 @@ public class CameraManager {
 
                         lastImageProxyWidth = processedFrameForDimensions.width();
                         lastImageProxyHeight = processedFrameForDimensions.height();
-                        // lastRotationDegrees = imageProxy.getImageInfo().getRotationDegrees(); // Không dùng ở đây nữa
 
                         finalQuadrilateralForOverlay = newlyDetectedQuadrilateral;
-                        Log.d(TAG, "DEBUG_DIM: Processed Mat dimensions (from processedFrameForDimensions): " + processedFrameForDimensions.width() + "x" + processedFrameForDimensions.height());
-                        Log.d(TAG, "DEBUG_DIM: Stored lastImageProxyWidth: " + lastImageProxyWidth + " lastImageProxyHeight: " + lastImageProxyHeight);
+                        // Log.d(TAG, "DEBUG_DIM: Processed Mat dimensions (from processedFrameForDimensions): " + processedFrameForDimensions.width() + "x" + processedFrameForDimensions.height());
+                        // Log.d(TAG, "DEBUG_DIM: Stored lastImageProxyWidth: " + lastImageProxyWidth + " lastImageProxyHeight: " + lastImageProxyHeight);
 
-                        handleIdCardAutoCapture(newlyDetectedQuadrilateral);
+                        // Xử lý tự động chụp tùy thuộc vào chế độ
+                        if (isIdCardMode) {
+                            handleIdCardAutoCapture(newlyDetectedQuadrilateral);
+                        } else {
+                            handleNormalScanAutoCapture(newlyDetectedQuadrilateral, processedFrameForDimensions.width(), processedFrameForDimensions.height());
+                        }
 
                     } else {
+                        // Nếu không phát hiện hình tứ giác, kiểm tra thời gian chờ để xóa lớp phủ
                         if (lastDetectedQuadrilateral != null && (System.currentTimeMillis() - lastDetectionTimestamp > QUAD_PERSISTENCE_TIMEOUT_MS)) {
                             Log.d(TAG, "lastDetectedQuadrilateral đã hết thời gian chờ. Giải phóng và đặt là null.");
                             lastDetectedQuadrilateral.release();
                             lastDetectedQuadrilateral = null;
                         }
-                        finalQuadrilateralForOverlay = lastDetectedQuadrilateral;
+                        finalQuadrilateralForOverlay = lastDetectedQuadrilateral; // Vẫn hiển thị cái cũ nếu chưa hết thời gian chờ
+                        // Reset các bộ đếm khung liên tiếp nếu không có hình tứ giác nào được phát hiện
+                        consecutiveValidFramesIdCard = 0;
+                        consecutiveStableFramesNormal = 0;
+                        if (previousStableQuadrilateral != null) {
+                            previousStableQuadrilateral.release();
+                            previousStableQuadrilateral = null;
+                        }
                     }
                 } else {
+                    // Nếu bỏ qua xử lý khung hình đầy đủ, vẫn kiểm tra thời gian chờ để xóa lớp phủ
                     if (lastDetectedQuadrilateral != null && (System.currentTimeMillis() - lastDetectionTimestamp > QUAD_PERSISTENCE_TIMEOUT_MS)) {
                         Log.d(TAG, "lastDetectedQuadrilateral đã hết thời gian chờ trên khung bị bỏ qua. Giải phóng và đặt là null.");
                         lastDetectedQuadrilateral.release();
                         lastDetectedQuadrilateral = null;
                     }
                     finalQuadrilateralForOverlay = lastDetectedQuadrilateral;
-                    Log.d(TAG, "Bỏ qua xử lý khung hình đầy đủ. Khung: " + frameCount + ". Hiển thị khung cũ nếu có.");
+                    // Log.d(TAG, "Bỏ qua xử lý khung hình đầy đủ. Khung: " + frameCount + ". Hiển thị khung cũ nếu có.");
                 }
 
+                // Cập nhật lớp phủ trên UI
                 if (finalQuadrilateralForOverlay != null) {
                     cameraCallbacks.updateOverlay(finalQuadrilateralForOverlay, lastImageProxyWidth, lastImageProxyHeight);
                 } else {
@@ -211,8 +238,12 @@ public class CameraManager {
         }
     }
 
+    /**
+     * Xử lý logic tự động chụp cho chế độ quét thẻ ID.
+     * @param newlyDetectedQuadrilateral Hình tứ giác mới được phát hiện.
+     */
     private void handleIdCardAutoCapture(MatOfPoint newlyDetectedQuadrilateral) {
-        if (isIdCardMode && autoCaptureEnabled) {
+        if (isIdCardMode && isAutoCaptureGloballyEnabled) { // Kiểm tra cả chế độ và bật/tắt toàn cục
             long currentTime = System.currentTimeMillis();
             Point[] points = newlyDetectedQuadrilateral.toArray();
             if (points.length == 4) {
@@ -229,35 +260,138 @@ public class CameraManager {
 
                 if (avgHeight > 0) {
                     double aspectRatio = avgWidth / avgHeight;
-                    Log.d(TAG, "Calculated Aspect Ratio: " + String.format("%.2f", aspectRatio) + " (Min: " + ID_CARD_ASPECT_RATIO_MIN + ", Max: " + ID_CARD_ASPECT_RATIO_MAX + ")");
+                    // Log.d(TAG, "Calculated Aspect Ratio (ID Card): " + String.format("%.2f", aspectRatio) + " (Min: " + ID_CARD_ASPECT_RATIO_MIN + ", Max: " + ID_CARD_ASPECT_RATIO_MAX + ")");
 
                     if (aspectRatio >= ID_CARD_ASPECT_RATIO_MIN && aspectRatio <= ID_CARD_ASPECT_RATIO_MAX) {
-                        consecutiveValidFrames++;
-                        Log.d(TAG, "Valid frame. Consecutive: " + consecutiveValidFrames + "/" + REQUIRED_CONSECUTIVE_FRAMES);
+                        consecutiveValidFramesIdCard++;
+                        // Log.d(TAG, "Valid frame (ID Card). Consecutive: " + consecutiveValidFramesIdCard + "/" + REQUIRED_CONSECUTIVE_FRAMES_ID_CARD);
 
-                        if (consecutiveValidFrames >= REQUIRED_CONSECUTIVE_FRAMES) {
-                            if (currentTime - lastAutoCaptureTime > AUTO_CAPTURE_COOLDOWN_MS) {
+                        if (consecutiveValidFramesIdCard >= REQUIRED_CONSECUTIVE_FRAMES_ID_CARD) {
+                            if (currentTime - lastIdCardAutoCaptureTime > ID_CARD_AUTO_CAPTURE_COOLDOWN_MS) {
                                 Log.d(TAG, "Phát hiện thẻ ID hợp lệ liên tục. Đang tự động chụp...");
                                 cameraCallbacks.onAutoCaptureTriggered();
-                                lastAutoCaptureTime = currentTime;
-                                consecutiveValidFrames = 0;
+                                lastIdCardAutoCaptureTime = currentTime;
+                                consecutiveValidFramesIdCard = 0; // Reset sau khi chụp
                             }
                         }
                     } else {
-                        consecutiveValidFrames = 0;
-                        Log.d(TAG, "Aspect ratio out of range. Resetting consecutive frames.");
+                        consecutiveValidFramesIdCard = 0;
+                        // Log.d(TAG, "Aspect ratio (ID Card) out of range. Resetting consecutive frames.");
                     }
                 } else {
-                    consecutiveValidFrames = 0;
-                    Log.d(TAG, "AvgHeight is zero. Resetting consecutive frames.");
+                    consecutiveValidFramesIdCard = 0;
+                    // Log.d(TAG, "AvgHeight (ID Card) is zero. Resetting consecutive frames.");
                 }
                 sortedPoints.release();
             } else {
-                consecutiveValidFrames = 0;
-                Log.d(TAG, "Not a 4-point quadrilateral. Resetting consecutive frames.");
+                consecutiveValidFramesIdCard = 0;
+                // Log.d(TAG, "Not a 4-point quadrilateral (ID Card). Resetting consecutive frames.");
             }
         } else {
-            consecutiveValidFrames = 0;
+            consecutiveValidFramesIdCard = 0; // Reset counter nếu chế độ không phải ID hoặc tự động chụp tắt
+        }
+    }
+
+    /**
+     * Xử lý logic tự động chụp cho chế độ quét tài liệu thông thường.
+     * Dựa trên sự ổn định của hình tứ giác và tỷ lệ khung hình.
+     * @param currentQuad Hình tứ giác hiện tại được phát hiện.
+     * @param frameWidth Chiều rộng của khung hình.
+     * @param frameHeight Chiều cao của khung hình.
+     */
+    private void handleNormalScanAutoCapture(MatOfPoint currentQuad, int frameWidth, int frameHeight) {
+        if (!isIdCardMode && isAutoCaptureGloballyEnabled) { // Chỉ chạy khi không ở chế độ ID và tự động chụp bật
+            long currentTime = System.currentTimeMillis();
+
+            if (currentQuad == null || currentQuad.empty() || currentQuad.toArray().length != 4) {
+                consecutiveStableFramesNormal = 0;
+                if (previousStableQuadrilateral != null) {
+                    previousStableQuadrilateral.release();
+                    previousStableQuadrilateral = null;
+                }
+                return;
+            }
+
+            // Sắp xếp các điểm để so sánh nhất quán
+            MatOfPoint sortedCurrentQuad = imageProcessor.sortPoints(new MatOfPoint(currentQuad.toArray()));
+            Point[] currentPoints = sortedCurrentQuad.toArray();
+
+            // Tính toán tỷ lệ khung hình của tài liệu
+            double widthTop = Math.sqrt(Math.pow(currentPoints[0].x - currentPoints[1].x, 2) + Math.pow(currentPoints[0].y - currentPoints[1].y, 2));
+            double widthBottom = Math.sqrt(Math.pow(currentPoints[3].x - currentPoints[2].x, 2) + Math.pow(currentPoints[3].y - currentPoints[2].y, 2));
+            double avgWidth = (widthTop + widthBottom) / 2.0;
+
+            double heightLeft = Math.sqrt(Math.pow(currentPoints[0].x - currentPoints[3].x, 2) + Math.pow(currentPoints[0].y - currentPoints[3].y, 2));
+            double heightRight = Math.sqrt(Math.pow(currentPoints[1].x - currentPoints[2].x, 2) + Math.pow(currentPoints[1].y - currentPoints[2].y, 2));
+            double avgHeight = (heightLeft + heightRight) / 2.0;
+
+            boolean isAspectRatioValid = false;
+            if (avgHeight > 0) {
+                double aspectRatio = avgWidth / avgHeight;
+                isAspectRatioValid = (aspectRatio >= NORMAL_SCAN_ASPECT_RATIO_MIN && aspectRatio <= NORMAL_SCAN_ASPECT_RATIO_MAX);
+                // Log.d(TAG, "Calculated Aspect Ratio (Normal Scan): " + String.format("%.2f", aspectRatio) + " (Valid: " + isAspectRatioValid + ")");
+            }
+
+            if (!isAspectRatioValid) {
+                consecutiveStableFramesNormal = 0;
+                if (previousStableQuadrilateral != null) {
+                    previousStableQuadrilateral.release();
+                    previousStableQuadrilateral = null;
+                }
+                sortedCurrentQuad.release();
+                return;
+            }
+
+            if (previousStableQuadrilateral == null) {
+                previousStableQuadrilateral = new MatOfPoint(currentPoints); // Tạo bản sao
+                consecutiveStableFramesNormal = 1;
+                // Log.d(TAG, "Normal Scan: Initializing previousStableQuadrilateral.");
+            } else {
+                Point[] prevPoints = previousStableQuadrilateral.toArray();
+                boolean isStable = true;
+
+                // Kiểm tra sự thay đổi vị trí của các điểm
+                for (int i = 0; i < 4; i++) {
+                    double dist = Math.sqrt(Math.pow(currentPoints[i].x - prevPoints[i].x, 2) + Math.pow(currentPoints[i].y - prevPoints[i].y, 2));
+                    if (dist > MIN_STABILITY_POINT_CHANGE_PIXELS) {
+                        isStable = false;
+                        break;
+                    }
+                }
+
+                // Kiểm tra sự thay đổi diện tích
+                double prevArea = Imgproc.contourArea(previousStableQuadrilateral);
+                double currentArea = Imgproc.contourArea(sortedCurrentQuad);
+                if (Math.abs(currentArea - prevArea) / prevArea > MIN_STABILITY_AREA_CHANGE_PERCENT) {
+                    isStable = false;
+                }
+
+                if (isStable) {
+                    consecutiveStableFramesNormal++;
+                    // Log.d(TAG, "Normal Scan: Stable frame. Consecutive: " + consecutiveStableFramesNormal + "/" + REQUIRED_CONSECUTIVE_STABLE_FRAMES_NORMAL);
+                    if (consecutiveStableFramesNormal >= REQUIRED_CONSECUTIVE_STABLE_FRAMES_NORMAL) {
+                        if (currentTime - lastNormalScanAutoCaptureTime > NORMAL_SCAN_AUTO_CAPTURE_COOLDOWN_MS) {
+                            Log.d(TAG, "Phát hiện tài liệu ổn định liên tục. Đang tự động chụp (Quét thông thường)...");
+                            cameraCallbacks.onAutoCaptureTriggered();
+                            lastNormalScanAutoCaptureTime = currentTime;
+                            consecutiveStableFramesNormal = 0; // Reset sau khi chụp
+                        }
+                    }
+                } else {
+                    consecutiveStableFramesNormal = 0;
+                    // Log.d(TAG, "Normal Scan: Not stable. Resetting consecutive frames.");
+                }
+                // Cập nhật previousStableQuadrilateral cho lần lặp tiếp theo
+                previousStableQuadrilateral.release(); // Giải phóng cái cũ
+                previousStableQuadrilateral = new MatOfPoint(currentPoints); // Tạo bản sao của cái hiện tại
+            }
+            sortedCurrentQuad.release();
+        } else {
+            consecutiveStableFramesNormal = 0; // Reset counter nếu không ở chế độ quét thông thường hoặc tự động chụp tắt
+            if (previousStableQuadrilateral != null) {
+                previousStableQuadrilateral.release();
+                previousStableQuadrilateral = null;
+            }
         }
     }
 
@@ -285,6 +419,7 @@ public class CameraManager {
                     Bitmap originalFullBitmap = null;
                     try {
                         originalFullBitmap = MediaStore.Images.Media.getBitmap(context.getContentResolver(), savedUri);
+                        // Xoay ảnh nếu chiều rộng lớn hơn chiều cao (ảnh ngang)
                         if (originalFullBitmap.getWidth() > originalFullBitmap.getHeight()) {
                             Matrix matrix = new Matrix();
                             matrix.postRotate(90);
@@ -293,13 +428,16 @@ public class CameraManager {
                         }
                     } catch (IOException e) {
                         Toast.makeText(context, context.getString(R.string.failed_to_load_captured_image), Toast.LENGTH_SHORT).show();
-                        Glide.with(context).load(savedUri).into(imageView);
+                        Glide.with(context).load(savedUri).into(imageView); // Vẫn hiển thị ảnh gốc nếu lỗi
                         cameraCallbacks.onImageCaptured(savedUri); // Gửi ảnh gốc nếu lỗi
                         return;
                     }
 
                     if (originalFullBitmap != null) {
-                        if (lastDetectedQuadrilateral != null && !lastDetectedQuadrilateral.empty()) {
+                        // Chỉ áp dụng biến đổi phối cảnh nếu có hình tứ giác được phát hiện gần đây
+                        if (lastDetectedQuadrilateral != null && !lastDetectedQuadrilateral.empty() &&
+                                (System.currentTimeMillis() - lastDetectionTimestamp < QUAD_PERSISTENCE_TIMEOUT_MS)) {
+
                             int originalDetectionWidth = lastImageProxyWidth;
                             int originalDetectionHeight = lastImageProxyHeight;
 
@@ -314,15 +452,16 @@ public class CameraManager {
                             double offsetX = 0;
                             double offsetY = 0;
 
+                            // Điều chỉnh tỷ lệ để ánh xạ đúng từ khung phân tích sang bitmap đã chụp
                             if (Math.abs(analysisAspectRatio - captureAspectRatio) > 0.01) {
-                                if (analysisAspectRatio > captureAspectRatio) {
+                                if (analysisAspectRatio > captureAspectRatio) { // Khung phân tích rộng hơn ảnh chụp
                                     effectiveSrcHeight = (double) originalDetectionWidth / captureAspectRatio;
                                     offsetY = (originalDetectionHeight - effectiveSrcHeight) / 2.0;
-                                    Log.d(TAG, "Điều chỉnh cho tỷ lệ khung hình phân tích rộng hơn, effectiveSrcHeight mới: " + effectiveSrcHeight + ", offsetY: " + offsetY);
-                                } else {
+                                    // Log.d(TAG, "Điều chỉnh cho tỷ lệ khung hình phân tích rộng hơn, effectiveSrcHeight mới: " + effectiveSrcHeight + ", offsetY: " + offsetY);
+                                } else { // Khung phân tích hẹp hơn ảnh chụp
                                     effectiveSrcWidth = (double) originalDetectionHeight * captureAspectRatio;
                                     offsetX = (originalDetectionWidth - effectiveSrcWidth) / 2.0;
-                                    Log.d(TAG, "Điều chỉnh cho tỷ lệ khung hình phân tích hẹp hơn, effectiveSrcWidth mới: " + effectiveSrcWidth + ", offsetX: " + offsetX);
+                                    // Log.d(TAG, "Điều chỉnh cho tỷ lệ khung hình phân tích hẹp hơn, effectiveSrcWidth mới: " + effectiveSrcWidth + ", offsetX: " + offsetX);
                                 }
                             }
 
@@ -398,7 +537,7 @@ public class CameraManager {
                             cameraCallbacks.onImageCaptured(processedUri);
 
                         } else {
-                            Log.w(TAG, "Không phát hiện khung giới hạn OpenCV hoặc khung rỗng. Hiển thị ảnh gốc đầy đủ.");
+                            Log.w(TAG, "Không phát hiện khung giới hạn OpenCV hợp lệ hoặc đã hết thời gian chờ. Hiển thị ảnh gốc đầy đủ.");
                             Glide.with(context).load(savedUri).into(imageView);
                             if (originalFullBitmap != null) originalFullBitmap.recycle();
                             cameraCallbacks.onImageCaptured(savedUri);
@@ -458,11 +597,39 @@ public class CameraManager {
             lastDetectedQuadrilateral.release();
             lastDetectedQuadrilateral = null;
         }
+        if (previousStableQuadrilateral != null) { // Giải phóng cả previousStableQuadrilateral
+            previousStableQuadrilateral.release();
+            previousStableQuadrilateral = null;
+        }
     }
 
+    /**
+     * Đặt chế độ camera (quét tài liệu thông thường hoặc thẻ ID).
+     * @param idCardMode True nếu là chế độ thẻ ID, false nếu là quét thông thường.
+     */
     public void setIdCardMode(boolean idCardMode) {
         isIdCardMode = idCardMode;
-        consecutiveValidFrames = 0; // Reset counter when mode changes
+        consecutiveValidFramesIdCard = 0; // Reset counter khi chế độ thay đổi
+        consecutiveStableFramesNormal = 0; // Reset counter khi chế độ thay đổi
+        if (previousStableQuadrilateral != null) {
+            previousStableQuadrilateral.release();
+            previousStableQuadrilateral = null;
+        }
         Log.d(TAG, "isIdCardMode set to: " + isIdCardMode);
+    }
+
+    /**
+     * Bật hoặc tắt chức năng tự động chụp toàn cục.
+     * @param enabled True để bật, false để tắt.
+     */
+    public void setAutoCaptureGloballyEnabled(boolean enabled) {
+        isAutoCaptureGloballyEnabled = enabled;
+        consecutiveValidFramesIdCard = 0; // Reset counter khi trạng thái thay đổi
+        consecutiveStableFramesNormal = 0; // Reset counter khi trạng thái thay đổi
+        if (previousStableQuadrilateral != null) {
+            previousStableQuadrilateral.release();
+            previousStableQuadrilateral = null;
+        }
+        Log.d(TAG, "Auto capture globally enabled set to: " + isAutoCaptureGloballyEnabled);
     }
 }

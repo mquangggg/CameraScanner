@@ -6,17 +6,20 @@ import android.util.Log;
 import android.util.Pair;
 import android.widget.ImageButton;
 import android.widget.ImageView;
-import android.widget.TextView; // Thêm import cho TextView nếu chưa có
+import android.widget.TextView; // Thêm import cho TextView
 import android.widget.Toast;
+import android.graphics.Color; // Thêm import cho Color
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.camera.view.PreviewView;
+import androidx.core.content.ContextCompat;
 import androidx.lifecycle.ViewModelProvider;
 
 import com.bumptech.glide.Glide;
 import com.example.camerascanner.R;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.google.android.material.tabs.TabLayout;
+
 
 import org.opencv.android.OpenCVLoader;
 
@@ -32,11 +35,12 @@ public class CameraActivity extends AppCompatActivity implements
     private FloatingActionButton btnTakePhoto;
     private ImageButton btnSelectImage;
     private TabLayout tabLayoutCameraModes;
-    private TextView textViewCameraTitle; // Thêm TextView cho tiêu đề để hiển thị thông báo
+    private TextView textViewCameraTitle;
+    private TextView btnToggleAutoCapture; // Đã đổi từ ImageButton sang TextView
 
     private AppPermissionHandler appPermissionHandler;
     private CameraViewModel cameraViewModel;
-    private UiStateManager uiStateManager; // UiStateManager vẫn hữu ích cho quản lý View visibility
+    private UiStateManager uiStateManager;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -51,13 +55,15 @@ public class CameraActivity extends AppCompatActivity implements
             Log.d(TAG, "OpenCV initialization successful!");
         }
 
+        // Ánh xạ các View từ layout
         previewView = findViewById(R.id.previewView);
         customOverlayView = findViewById(R.id.customOverlayView);
         imageView = findViewById(R.id.imageView);
         btnTakePhoto = findViewById(R.id.btnTakePhoto);
         btnSelectImage = findViewById(R.id.btnSelectImage);
         tabLayoutCameraModes = findViewById(R.id.tabLayoutCameraModes);
-        textViewCameraTitle = findViewById(R.id.textViewCameraTitle); // Ánh xạ TextView
+        textViewCameraTitle = findViewById(R.id.textViewCameraTitle);
+        btnToggleAutoCapture = findViewById(R.id.btnToggleAutoCapture); // Ánh xạ TextView
 
         previewView.setScaleType(PreviewView.ScaleType.FIT_CENTER);
 
@@ -66,7 +72,6 @@ public class CameraActivity extends AppCompatActivity implements
 
         // Khởi tạo ViewModel
         cameraViewModel = new ViewModelProvider(this).get(CameraViewModel.class);
-        // Truyền các View và Activity cho ViewModel để khởi tạo các Helper
         cameraViewModel.initialize(this, previewView, customOverlayView, imageView);
 
         // Quan sát LiveData từ ViewModel
@@ -96,7 +101,6 @@ public class CameraActivity extends AppCompatActivity implements
             @Override
             public void onTabSelected(TabLayout.Tab tab) {
                 int position = tab.getPosition();
-                // Dựa vào vị trí tab để đặt chế độ camera trong ViewModel
                 if (position == 0) {
                     cameraViewModel.setCameraMode(CameraViewModel.CameraMode.NORMAL_SCAN);
                     Log.d(TAG, "Chế độ: Quét tài liệu");
@@ -104,33 +108,33 @@ public class CameraActivity extends AppCompatActivity implements
                     cameraViewModel.setCameraMode(CameraViewModel.CameraMode.ID_CARD_SCAN);
                     Log.d(TAG, "Chế độ: Thẻ ID");
                 }
-                // Xóa lớp phủ khi chuyển chế độ
                 customOverlayView.clearBoundingBox();
                 customOverlayView.invalidate();
             }
 
             @Override
-            public void onTabUnselected(TabLayout.Tab tab) {
-                // Không cần xử lý gì khi tab không được chọn
-            }
+            public void onTabUnselected(TabLayout.Tab tab) {}
 
             @Override
-            public void onTabReselected(TabLayout.Tab tab) {
-                // Có thể thêm logic ở đây nếu muốn xử lý khi tab được chọn lại
-            }
+            public void onTabReselected(TabLayout.Tab tab) {}
         });
 
-        // Chọn tab mặc định (ví dụ: tab "Quét tài liệu") khi khởi động
+        // Chọn tab mặc định (ví dụ: tab "scan") khi khởi động
         if (tabLayoutCameraModes.getTabCount() > 0) {
             tabLayoutCameraModes.selectTab(tabLayoutCameraModes.getTabAt(0));
         }
+
+        // Thiết lập sự kiện click cho nút bật/tắt tự động chụp
+        btnToggleAutoCapture.setOnClickListener(v -> {
+            boolean currentStatus = Boolean.TRUE.equals(cameraViewModel.isAutoCaptureEnabled.getValue());
+            cameraViewModel.setAutoCaptureEnabled(!currentStatus); // Đảo ngược trạng thái
+        });
     }
 
     /**
      * Quan sát các LiveData từ CameraViewModel để cập nhật UI.
      */
     private void observeViewModel() {
-        // Quan sát trạng thái hiển thị camera preview
         cameraViewModel.showCameraPreview.observe(this, show -> {
             if (show) {
                 uiStateManager.showCameraPreviewUi();
@@ -139,7 +143,6 @@ public class CameraActivity extends AppCompatActivity implements
             }
         });
 
-        // Quan sát dữ liệu hình tứ giác để vẽ lớp phủ
         cameraViewModel.overlayQuadrilateral.observe(this, quadrilateral -> {
             if (quadrilateral != null && cameraViewModel.overlayDimensions.getValue() != null) {
                 Pair<Integer, Integer> dimensions = cameraViewModel.overlayDimensions.getValue();
@@ -159,38 +162,32 @@ public class CameraActivity extends AppCompatActivity implements
             }
         });
 
-        // Quan sát Uri của ảnh để hiển thị trong ImageView
         cameraViewModel.imageToPreview.observe(this, imageUri -> {
             if (imageUri != null) {
                 Glide.with(this).load(imageUri).into(imageView);
             } else {
-                imageView.setImageDrawable(null); // Xóa ảnh nếu URI null
+                imageView.setImageDrawable(null);
             }
         });
 
-        // Quan sát thông báo lỗi/hướng dẫn từ ViewModel và hiển thị Toast
         cameraViewModel.errorMessage.observe(this, message -> {
             if (message != null && !message.isEmpty()) {
                 Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
-                // Bạn cũng có thể hiển thị thông báo này trên textViewCameraTitle
                 textViewCameraTitle.setText(message);
-                cameraViewModel.errorMessageHandled(); // Đánh dấu đã xử lý thông báo lỗi
+                cameraViewModel.errorMessageHandled();
             } else {
-                // Nếu không có thông báo lỗi, đặt lại tiêu đề mặc định
-                textViewCameraTitle.setText(getString(R.string.app_name)); // Hoặc một chuỗi mặc định khác
+                textViewCameraTitle.setText(getString(R.string.app_name));
             }
         });
 
-        // Quan sát khi tự động chụp được kích hoạt (chủ yếu cho chế độ thẻ ID)
         cameraViewModel.autoCaptureTriggered.observe(this, triggered -> {
             if (triggered != null && triggered) {
                 Toast.makeText(CameraActivity.this, "Tự động chụp!", Toast.LENGTH_SHORT).show();
-                cameraViewModel.takePhoto(imageView); // Gọi takePhoto để bắt đầu quá trình chụp
-                cameraViewModel.autoCaptureHandled(); // Đánh dấu đã xử lý sự kiện
+                cameraViewModel.takePhoto(imageView);
+                cameraViewModel.autoCaptureHandled();
             }
         });
 
-        // Quan sát khi cần khởi chạy CropActivity
         cameraViewModel.cropActivityNeeded.observe(this, needed -> {
             if (needed != null && needed) {
                 Uri currentImageUri = cameraViewModel.imageToPreview.getValue();
@@ -200,24 +197,19 @@ public class CameraActivity extends AppCompatActivity implements
                     Toast.makeText(this, "Không có ảnh để cắt.", Toast.LENGTH_SHORT).show();
                     Log.e(TAG, "Không có ảnh để cắt khi cropActivityNeeded là true");
                 }
-                cameraViewModel.cropActivityLaunched(); // Đánh dấu đã xử lý sự kiện
+                cameraViewModel.cropActivityLaunched();
             }
         });
 
-        // Quan sát chế độ camera hiện tại để cập nhật UI (nếu cần thêm logic UI phức tạp)
         cameraViewModel.currentCameraMode.observe(this, mode -> {
-            // Ví dụ: thay đổi màu sắc hoặc biểu tượng dựa trên chế độ
             if (mode == CameraViewModel.CameraMode.ID_CARD_SCAN) {
-                // Có thể làm nổi bật một số phần UI hoặc hiển thị hướng dẫn cụ thể
                 Log.d(TAG, "UI đang ở chế độ THẺ ID");
             } else {
                 Log.d(TAG, "UI đang ở chế độ QUÉT TÀI LIỆU");
             }
-            // Đặt lại tiêu đề mặc định khi chuyển chế độ
             textViewCameraTitle.setText(getString(R.string.app_name));
         });
 
-        // Quan sát trạng thái chụp thẻ ID để hiển thị hướng dẫn cụ thể hơn
         cameraViewModel.idCardCaptureState.observe(this, state -> {
             if (cameraViewModel.currentCameraMode.getValue() == CameraViewModel.CameraMode.ID_CARD_SCAN) {
                 switch (state) {
@@ -238,8 +230,16 @@ public class CameraActivity extends AppCompatActivity implements
                         break;
                 }
             } else {
-                // Đảm bảo tiêu đề trở lại mặc định khi không ở chế độ ID_CARD_SCAN
                 textViewCameraTitle.setText(getString(R.string.app_name));
+            }
+        });
+
+        // Quan sát trạng thái bật/tắt tự động chụp để cập nhật màu chữ của TextView
+        cameraViewModel.isAutoCaptureEnabled.observe(this, isEnabled -> {
+            if (isEnabled) {
+                btnToggleAutoCapture.setTextColor(ContextCompat.getColor(this, R.color.green_accent)); // Màu xanh khi bật
+            } else {
+                btnToggleAutoCapture.setTextColor(Color.WHITE); // Màu trắng khi tắt
             }
         });
     }

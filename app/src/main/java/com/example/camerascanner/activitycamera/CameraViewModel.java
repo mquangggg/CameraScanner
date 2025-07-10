@@ -42,6 +42,7 @@ public class CameraViewModel extends AndroidViewModel implements
         STITCHING_COMPLETE
     }
 
+    // LiveData cho trạng thái UI và dữ liệu
     private final MutableLiveData<Boolean> _showCameraPreview = new MutableLiveData<>(true);
     public LiveData<Boolean> showCameraPreview = _showCameraPreview;
 
@@ -63,14 +64,21 @@ public class CameraViewModel extends AndroidViewModel implements
     private final MutableLiveData<Boolean> _cropActivityNeeded = new MutableLiveData<>();
     public LiveData<Boolean> cropActivityNeeded = _cropActivityNeeded;
 
+    // LiveData cho chế độ camera hiện tại
     private final MutableLiveData<CameraMode> _currentCameraMode = new MutableLiveData<>(CameraMode.NORMAL_SCAN);
     public LiveData<CameraMode> currentCameraMode = _currentCameraMode;
 
+    // LiveData cho trạng thái chụp thẻ ID
     private final MutableLiveData<IdCardCaptureState> _idCardCaptureState = new MutableLiveData<>(IdCardCaptureState.IDLE);
     public LiveData<IdCardCaptureState> idCardCaptureState = _idCardCaptureState;
 
+    // LiveData mới cho trạng thái bật/tắt tự động chụp toàn cục
+    private final MutableLiveData<Boolean> _isAutoCaptureEnabled = new MutableLiveData<>(true); // Mặc định bật
+    public LiveData<Boolean> isAutoCaptureEnabled = _isAutoCaptureEnabled;
+
     private Uri frontIdCardImageUri;
 
+    // Helper classes
     private CameraManager cameraManager;
     private ImageProcessor imageProcessor;
     private GalleryHandler galleryHandler;
@@ -83,9 +91,12 @@ public class CameraViewModel extends AndroidViewModel implements
         imageProcessor = new ImageProcessor();
     }
 
+    // Phương thức khởi tạo các helper cần context/lifecycle. Sẽ được gọi từ Activity
     public void initialize(CameraActivity activity, PreviewView previewView, CustomOverlayView customOverlayView, ImageView imageView) {
         if (cameraManager == null) {
             cameraManager = new CameraManager(activity, activity, previewView, customOverlayView, imageProcessor, cameraExecutor, this);
+            // Đảm bảo trạng thái tự động chụp ban đầu được thiết lập cho CameraManager
+            cameraManager.setAutoCaptureGloballyEnabled(Boolean.TRUE.equals(_isAutoCaptureEnabled.getValue()));
         }
         if (galleryHandler == null) {
             galleryHandler = new GalleryHandler(activity, this);
@@ -103,6 +114,10 @@ public class CameraViewModel extends AndroidViewModel implements
         }
     }
 
+    /**
+     * Phương thức để thay đổi chế độ camera (quét tài liệu hoặc thẻ ID).
+     * @param mode Chế độ camera mới.
+     */
     public void setCameraMode(CameraMode mode) {
         _currentCameraMode.postValue(mode);
         if (cameraManager != null) {
@@ -119,6 +134,23 @@ public class CameraViewModel extends AndroidViewModel implements
         }
     }
 
+    /**
+     * Bật hoặc tắt chức năng tự động chụp toàn cục.
+     * @param enabled True để bật, false để tắt.
+     */
+    public void setAutoCaptureEnabled(boolean enabled) {
+        _isAutoCaptureEnabled.postValue(enabled);
+        if (cameraManager != null) {
+            cameraManager.setAutoCaptureGloballyEnabled(enabled);
+        }
+        _errorMessage.postValue(enabled ? "Tự động chụp đã BẬT." : "Tự động chụp đã TẮT.");
+    }
+
+    /**
+     * Kích hoạt hành động chụp ảnh dựa trên chế độ camera hiện tại.
+     * Nếu là chế độ ID_CARD_SCAN, sẽ quản lý quy trình chụp 2 lần.
+     * @param imageView ImageView để hiển thị ảnh preview (nếu cần).
+     */
     public void takePhoto(ImageView imageView) {
         if (cameraManager == null) {
             _errorMessage.postValue("Camera manager not initialized.");
@@ -168,9 +200,7 @@ public class CameraViewModel extends AndroidViewModel implements
     //region CameraManager.CameraCallbacks
     @Override
     public void onImageCaptured(Uri imageUri) {
-        // Kích hoạt LiveData để Activity hiển thị preview (nếu cần, nhưng sẽ bị ghi đè bởi ImagePreviewActivity)
         _imageToPreview.postValue(imageUri);
-        // Ẩn camera preview ngay lập tức
         _showCameraPreview.postValue(false);
 
         if (_currentCameraMode.getValue() == CameraMode.ID_CARD_SCAN) {
@@ -178,8 +208,8 @@ public class CameraViewModel extends AndroidViewModel implements
             if (currentState == IdCardCaptureState.CAPTURING_FRONT) {
                 frontIdCardImageUri = imageUri;
                 _idCardCaptureState.postValue(IdCardCaptureState.FRONT_CAPTURED);
-                _showCameraPreview.postValue(true); // Hiển thị lại camera để chụp mặt sau
-                _imageToPreview.postValue(null); // Xóa ảnh preview cũ
+                _showCameraPreview.postValue(true);
+                _imageToPreview.postValue(null);
                 Log.d(TAG, "Đã chụp mặt trước thẻ ID: " + imageUri.toString());
                 _errorMessage.postValue("Hãy chụp mặt sau của thẻ ID.");
                 _idCardCaptureState.postValue(IdCardCaptureState.CAPTURING_BACK);
@@ -200,7 +230,6 @@ public class CameraViewModel extends AndroidViewModel implements
                             _idCardCaptureState.postValue(IdCardCaptureState.STITCHING_COMPLETE);
                             Log.d(TAG, "Đã ghép ảnh thẻ ID thành công: " + stitchedUri.toString());
                             _errorMessage.postValue("Đã ghép ảnh thẻ ID. Bạn có thể cắt hoặc xác nhận.");
-                            // *** GỌI launchImagePreviewActivity Ở ĐÂY CHO ẢNH GHÉP ***
                             launchImagePreviewActivity(stitchedUri);
                         } else {
                             _errorMessage.postValue("Lỗi khi ghép ảnh thẻ ID.");
@@ -218,9 +247,7 @@ public class CameraViewModel extends AndroidViewModel implements
                 });
             }
         } else {
-            // Logic cho chế độ quét tài liệu thông thường
             Log.d(TAG, "Ảnh tài liệu thông thường đã chụp: " + imageUri.toString());
-            // *** GỌI launchImagePreviewActivity Ở ĐÂY CHO ẢNH THÔNG THƯỜNG ***
             launchImagePreviewActivity(imageUri);
         }
     }
@@ -256,7 +283,6 @@ public class CameraViewModel extends AndroidViewModel implements
         _currentCameraMode.postValue(CameraMode.NORMAL_SCAN);
         _idCardCaptureState.postValue(IdCardCaptureState.IDLE);
         frontIdCardImageUri = null;
-        // *** GỌI launchImagePreviewActivity Ở ĐÂY CHO ẢNH TỪ THƯ VIỆN ***
         launchImagePreviewActivity(imageUri);
     }
 
@@ -270,9 +296,8 @@ public class CameraViewModel extends AndroidViewModel implements
     //region ActivityLauncher.ActivityLauncherCallbacks
     @Override
     public void onImagePreviewResult(Uri imageUri) {
-        // Khi ImagePreviewActivity trả về kết quả (ảnh đã xoay/xác nhận)
-        _imageToPreview.postValue(imageUri); // Cập nhật URI nếu có thay đổi
-        _cropActivityNeeded.postValue(true); // Báo hiệu cần launch CropActivity
+        _imageToPreview.postValue(imageUri);
+        _cropActivityNeeded.postValue(true);
         Log.d(TAG, "Ảnh được xác nhận từ ImagePreviewActivity: " + imageUri.toString());
     }
 
@@ -310,13 +335,11 @@ public class CameraViewModel extends AndroidViewModel implements
 
     @Override
     public void onLauncherClosed() {
-        // Khi một Activity con kết thúc và chúng ta muốn quay lại camera
-        // Chỉ reset về camera preview nếu không phải đang trong quá trình chụp ID card giữa chừng
         if (_currentCameraMode.getValue() == CameraMode.NORMAL_SCAN ||
                 _idCardCaptureState.getValue() == IdCardCaptureState.STITCHING_COMPLETE ||
                 _idCardCaptureState.getValue() == IdCardCaptureState.IDLE) {
             _showCameraPreview.postValue(true);
-            _imageToPreview.postValue(null); // Đảm bảo không hiển thị ảnh cũ
+            _imageToPreview.postValue(null);
         }
     }
     //endregion
