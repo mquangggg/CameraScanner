@@ -1,4 +1,4 @@
-package com.example.camerascanner.activitycamera.CameraActivity;
+package com.example.camerascanner.activitycamera;
 
 import android.content.Intent;
 import android.net.Uri;
@@ -10,7 +10,6 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 
 import com.example.camerascanner.R;
-import com.example.camerascanner.activitycamera.ImagePreviewActivity;
 import com.example.camerascanner.activitycrop.CropActivity;
 
 public class ActivityLauncher {

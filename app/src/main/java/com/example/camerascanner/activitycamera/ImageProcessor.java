@@ -1,9 +1,13 @@
-package com.example.camerascanner.activitycamera.CameraActivity;
+package com.example.camerascanner.activitycamera;
 
+import android.graphics.Bitmap; // Thêm import cho Bitmap
+import android.content.Context; // Thêm import cho Context
+import android.net.Uri; // Thêm import cho Uri
 import android.util.Log;
 import android.util.Pair;
 
 import androidx.camera.core.ImageProxy;
+import androidx.annotation.NonNull; // Thêm import cho NonNull nếu chưa có
 
 import org.opencv.core.Core;
 import org.opencv.core.CvType;
@@ -13,7 +17,11 @@ import org.opencv.core.MatOfPoint2f;
 import org.opencv.core.Point;
 import org.opencv.imgproc.CLAHE;
 import org.opencv.imgproc.Imgproc;
+import org.opencv.android.Utils; // Thêm import cho Utils để chuyển đổi Bitmap-Mat
 
+import java.io.File; // Thêm import cho File
+import java.io.FileOutputStream; // Thêm import cho FileOutputStream
+import java.io.IOException; // Thêm import cho IOException
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -118,6 +126,12 @@ public class ImageProcessor {
                     m.release();
                 }
             }
+            // Không giải phóng 'gray' ở đây nếu nó được gán cho 'matForDimensionStorage'
+            // Nó sẽ được giải phóng cùng với matForDimensionStorage khi không còn cần thiết.
+            // Nếu matForDimensionStorage là null, gray vẫn cần được giải phóng.
+            if (matForDimensionStorage == null && gray != null) {
+                gray.release();
+            }
         }
         return new Pair<>(bestQuadrilateral, matForDimensionStorage);
     }
@@ -208,9 +222,95 @@ public class ImageProcessor {
         rect[1] = topPoints[1];
 
         Arrays.sort(bottomPoints, (p1, p2) -> Double.compare(p1.x, p2.x));
-        rect[3] = bottomPoints[0];
-        rect[2] = bottomPoints[1];
+        rect[3] = bottomPoints[0]; // bottom-left
+        rect[2] = bottomPoints[1]; // bottom-right
 
         return new MatOfPoint(rect);
+    }
+
+    /**
+     * Ghép hai Bitmap thành một, xếp chồng theo chiều dọc.
+     * Các ảnh sẽ được resize để có cùng chiều rộng trước khi ghép.
+     * @param frontImage Bitmap của ảnh mặt trước.
+     * @param backImage Bitmap của ảnh mặt sau.
+     * @param context Context của ứng dụng để lưu file.
+     * @return Uri của ảnh đã được ghép, hoặc null nếu có lỗi.
+     */
+    public Uri stitchImages(@NonNull Bitmap frontImage, @NonNull Bitmap backImage, @NonNull Context context) {
+        if (frontImage == null || backImage == null) {
+            Log.e(TAG, "Một hoặc cả hai Bitmap đầu vào rỗng cho chức năng ghép ảnh.");
+            return null;
+        }
+
+        Mat matFront = new Mat(frontImage.getHeight(), frontImage.getWidth(), CvType.CV_8UC4);
+        Utils.bitmapToMat(frontImage, matFront);
+
+        Mat matBack = new Mat(backImage.getHeight(), backImage.getWidth(), CvType.CV_8UC4);
+        Utils.bitmapToMat(backImage, matBack);
+
+        // Đảm bảo cả hai ảnh có cùng chiều rộng để ghép dọc dễ dàng.
+        int targetWidth = Math.max(matFront.width(), matBack.width());
+
+        Mat resizedFront = new Mat();
+        Mat resizedBack = new Mat();
+
+        // Resize ảnh để chúng có cùng chiều rộng, giữ nguyên tỷ lệ khung hình
+        Imgproc.resize(matFront, resizedFront, new org.opencv.core.Size(targetWidth, matFront.height() * targetWidth / matFront.width()));
+        Imgproc.resize(matBack, resizedBack, new org.opencv.core.Size(targetWidth, matBack.height() * targetWidth / matBack.width()));
+
+        // Tạo một Mat mới có đủ không gian cho cả hai ảnh xếp dọc
+        Mat stitchedMat = new Mat(resizedFront.rows() + resizedBack.rows(), targetWidth, CvType.CV_8UC4);
+
+        // Sao chép ảnh mặt trước vào phần trên của stitchedMat
+        resizedFront.copyTo(stitchedMat.rowRange(0, resizedFront.rows()));
+        // Sao chép ảnh mặt sau vào phần dưới của stitchedMat
+        resizedBack.copyTo(stitchedMat.rowRange(resizedFront.rows(), stitchedMat.rows()));
+
+        Bitmap stitchedBitmap = Bitmap.createBitmap(stitchedMat.cols(), stitchedMat.rows(), Bitmap.Config.ARGB_8888);
+        Utils.matToBitmap(stitchedMat, stitchedBitmap);
+
+        // Giải phóng các đối tượng Mat không còn cần thiết
+        matFront.release();
+        matBack.release();
+        resizedFront.release();
+        resizedBack.release();
+        stitchedMat.release();
+
+        // Lưu Bitmap đã ghép vào bộ nhớ cache và trả về Uri
+        return saveProcessedBitmapToCache(stitchedBitmap, context);
+    }
+
+    /**
+     * Lưu Bitmap đã xử lý vào bộ nhớ cache của ứng dụng.
+     * @param bitmap Bitmap cần lưu.
+     * @param context Context của ứng dụng.
+     * @return Uri của file đã lưu, hoặc null nếu có lỗi.
+     */
+    private Uri saveProcessedBitmapToCache(@NonNull Bitmap bitmap, @NonNull Context context) {
+        String fileName = "stitched_id_image_" + System.currentTimeMillis() + ".jpeg";
+        File cachePath = new File(context.getCacheDir(), "stitched_images");
+        cachePath.mkdirs(); // Tạo thư mục nếu nó chưa tồn tại
+
+        File file = new File(cachePath, fileName);
+
+        FileOutputStream fos = null;
+        try {
+            fos = new FileOutputStream(file);
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, fos); // Nén ảnh JPEG với chất lượng 90%
+            fos.flush();
+            Log.d(TAG, "Ảnh ghép đã lưu vào: " + file.getAbsolutePath());
+            return Uri.fromFile(file);
+        } catch (IOException e) {
+            Log.e(TAG, "Lỗi khi lưu bitmap đã ghép vào cache: " + e.getMessage(), e);
+            return null;
+        } finally {
+            if (fos != null) {
+                try {
+                    fos.close();
+                } catch (IOException e) {
+                    Log.e(TAG, "Lỗi khi đóng FileOutputStream: " + e.getMessage(), e);
+                }
+            }
+        }
     }
 }

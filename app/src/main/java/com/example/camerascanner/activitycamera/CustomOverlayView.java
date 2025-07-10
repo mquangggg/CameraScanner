@@ -5,7 +5,6 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path; // Thêm import cho Path
-import android.graphics.PointF;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.View;
@@ -15,7 +14,6 @@ import androidx.annotation.Nullable;
 import org.opencv.core.MatOfPoint;
 import org.opencv.core.Point; // Thêm import cho org.opencv.core.Point
 
-import java.util.Arrays; // Thêm import cho Arrays
 
 public class CustomOverlayView extends View {
 

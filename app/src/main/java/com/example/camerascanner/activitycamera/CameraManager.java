@@ -1,4 +1,4 @@
-package com.example.camerascanner.activitycamera.CameraActivity;
+package com.example.camerascanner.activitycamera;
 
 import android.content.Context;
 import android.graphics.Bitmap;
@@ -25,7 +25,6 @@ import androidx.lifecycle.LifecycleOwner;
 
 import com.bumptech.glide.Glide;
 import com.example.camerascanner.R;
-import com.example.camerascanner.activitycamera.CustomOverlayView;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import org.opencv.android.Utils;

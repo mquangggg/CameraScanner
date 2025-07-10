@@ -1,4 +1,4 @@
-package com.example.camerascanner.activitycamera.CameraActivity;
+package com.example.camerascanner.activitycamera;
 
 import android.view.View;
 import android.widget.ImageButton;
@@ -6,7 +6,6 @@ import android.widget.ImageView;
 
 import androidx.camera.view.PreviewView;
 
-import com.example.camerascanner.activitycamera.CustomOverlayView;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 
 public class UiStateManager {

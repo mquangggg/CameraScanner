@@ -1,4 +1,4 @@
-package com.example.camerascanner.activitycamera.CameraActivity;
+package com.example.camerascanner.activitycamera;
 
 import android.net.Uri;
 import android.widget.Toast;
