@@ -1,4 +1,4 @@
-package com.example.camerascanner.activitycamera; // Đảm bảo đúng package của bạn
+package com.example.camerascanner.activitycamera.CameraActivity; // Đảm bảo đúng package của bạn
 
 import android.Manifest;
 import android.content.pm.PackageManager;
